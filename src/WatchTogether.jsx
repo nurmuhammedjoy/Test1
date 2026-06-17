@@ -48,8 +48,8 @@ const appId = globalThis.__app_id ?? 'watch-together-local';
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [roomId, setRoomId] = useState('THEATER-01');
-  const [inputRoomId, setInputRoomId] = useState('THEATER-01');
+  const [roomId, setRoomId] = useState('hangout-01');
+  const [inputRoomId, setInputRoomId] = useState('hangout-01');
   const [isJoined, setIsJoined] = useState(false);
   
   // Roles: 'admin' or 'viewer'
@@ -83,6 +83,7 @@ export default function App() {
   const playerContainerRef = useRef(null);
   const controlsTimeoutRef = useRef(null);
   const lastUpdateSentRef = useRef(0);
+  const lastRemoteSourceKeyRef = useRef('');
 
   // Custom Minimalist Notification / Banner
   const [toast, setToast] = useState({ show: false, message: '', type: 'info' });
@@ -92,32 +93,10 @@ export default function App() {
     setTimeout(() => setToast({ show: false, message: '', type: 'info' }), 4000);
   }, []);
 
-  // Handle incoming remote states safely to prevent feedback jitter
-  const handleRemoteStateChange = useCallback((data) => {
-    if (!videoRef.current) return;
+  const applyPlaybackState = useCallback((data) => {
+    if (!videoRef.current) return false;
+
     const video = videoRef.current;
-
-    // Skip if this update was triggered by our own changes
-    if (data.lastUpdatedBy === user?.uid) {
-      return;
-    }
-
-    setSyncStatus('SYNCING');
-
-    // 1. Sync Video Metadata/Source Requirements
-    if (data.videoSourceType === 'url' && data.videoUrl !== videoUrl) {
-      setVideoUrl(data.videoUrl);
-      setVideoSourceType('url');
-      setResolvedVideoSrc(data.videoUrl);
-      showToast("Video Source Update Received.", "info");
-    } else if (data.videoSourceType === 'file' && (data.videoName !== selectedFile?.name || data.videoSize !== selectedFile?.size)) {
-      setVideoSourceType('file');
-      // Viewer needs to load the matching file
-      if (role === 'viewer') {
-        setResolvedVideoSrc('');
-        showToast(`Required File: "${data.videoName}". Mount local file copy.`, "warning");
-      }
-    }
 
     // 2. Playback State Syncing (Play / Pause)
     if (data.playing && video.paused) {
@@ -137,10 +116,63 @@ export default function App() {
       setCurrentTime(data.currentTime);
     }
 
+    return true;
+  }, [showToast]);
+
+  // Handle incoming remote states safely to prevent feedback jitter
+  const handleRemoteStateChange = useCallback((data) => {
+    // Skip if this update was triggered by our own changes
+    if (data.lastUpdatedBy === user?.uid) {
+      return;
+    }
+
+    setSyncStatus('SYNCING');
+
+    // 1. Sync Video Metadata/Source Requirements
+    if (data.videoSourceType === 'url') {
+      const nextSourceKey = `url:${data.videoUrl || ''}`;
+      const sourceChanged = lastRemoteSourceKeyRef.current !== nextSourceKey;
+      setVideoSourceType('url');
+      setVideoUrl(data.videoUrl || '');
+      setResolvedVideoSrc(data.videoUrl || '');
+      if (sourceChanged) {
+        showToast("Video Source Update Received.", "info");
+        lastRemoteSourceKeyRef.current = nextSourceKey;
+      }
+    } else if (data.videoSourceType === 'file') {
+      const nextSourceKey = `file:${data.videoName || ''}:${data.videoSize || 0}`;
+      const sourceChanged = lastRemoteSourceKeyRef.current !== nextSourceKey;
+      setVideoSourceType('file');
+      // Viewer needs to load the matching file
+      if (role === 'viewer' && (data.videoName !== selectedFile?.name || data.videoSize !== selectedFile?.size)) {
+        setResolvedVideoSrc('');
+        if (sourceChanged) {
+          showToast(`Need the matching file: "${data.videoName}".`, "warning");
+        }
+      }
+      if (sourceChanged) {
+        lastRemoteSourceKeyRef.current = nextSourceKey;
+      }
+    }
+
+    if (!videoRef.current) {
+      setTimeout(() => {
+        setSyncStatus('ONLINE');
+      }, 500);
+      return;
+    }
+
+    applyPlaybackState(data);
+
     setTimeout(() => {
       setSyncStatus('ONLINE');
     }, 500);
-  }, [role, selectedFile?.name, selectedFile?.size, showToast, user?.uid, videoUrl]);
+  }, [applyPlaybackState, role, selectedFile?.name, selectedFile?.size, showToast, user?.uid]);
+
+  useEffect(() => {
+    if (!roomData || !resolvedVideoSrc || !videoRef.current) return;
+    applyPlaybackState(roomData);
+  }, [applyPlaybackState, roomData, resolvedVideoSrc]);
 
   // --- 1. Authentication (Rule 3) ---
   useEffect(() => {
@@ -237,8 +269,10 @@ export default function App() {
     if (!file) return;
 
     setSelectedFile(file);
+    setVideoSourceType('file');
     const localUrl = URL.createObjectURL(file);
     setResolvedVideoSrc(localUrl);
+    lastRemoteSourceKeyRef.current = `file:${file.name}:${file.size}`;
 
     if (role === 'admin' && isAdminUnlocked) {
       updateRoomStateInDB({
@@ -250,14 +284,16 @@ export default function App() {
         playing: false
       });
     }
-    showToast(`Mounted File: ${file.name}`, "info");
+    showToast(`Loaded file: ${file.name}`, "info");
   };
 
   const handleUrlSubmit = (e) => {
     e.preventDefault();
     if (!videoUrl.trim()) return;
 
+    setVideoSourceType('url');
     setResolvedVideoSrc(videoUrl);
+    lastRemoteSourceKeyRef.current = `url:${videoUrl}`;
     if (role === 'admin' && isAdminUnlocked) {
       updateRoomStateInDB({
         videoSourceType: 'url',
@@ -268,14 +304,14 @@ export default function App() {
         playing: false
       });
     }
-    showToast("Mounted Network Stream URL.", "info");
+    showToast("Loaded stream link.", "info");
   };
 
   const togglePlay = () => {
     if (!videoRef.current) return;
     
     if (role !== 'admin') {
-      showToast("Access Restricted. Admin permission required.", "error");
+      showToast("Host access needed for that.", "error");
       return;
     }
 
@@ -294,7 +330,7 @@ export default function App() {
     if (!videoRef.current) return;
     
     if (role !== 'admin') {
-      showToast("Access Restricted. Timeline governed by Admin.", "error");
+      showToast("Timeline is host-only.", "error");
       return;
     }
 
@@ -413,7 +449,7 @@ export default function App() {
     if (!inputRoomId.trim()) return;
     setRoomId(inputRoomId.trim().toUpperCase());
     setIsJoined(true);
-    showToast(`Mounted Terminal Room: ${inputRoomId.toUpperCase()}`, "info");
+    showToast(`Joined room: ${inputRoomId.toUpperCase()}`, "info");
   };
 
   const handleAdminAuth = () => {
@@ -421,18 +457,18 @@ export default function App() {
       if (inputPasscode === roomData.adminPasscode) {
         setRole('admin');
         setIsAdminUnlocked(true);
-        showToast("Admin Key Unlocked. Control Acquired.", "info");
+        showToast("Host key unlocked.", "info");
       } else {
-        showToast("Incorrect Security Passcode.", "error");
+        showToast("Wrong code.", "error");
       }
     } else {
       if (!adminPasscode.trim()) {
-        showToast("Enter passcode to configure Admin lock.", "warning");
+        showToast("Set a host code first.", "warning");
         return;
       }
       setRole('admin');
       setIsAdminUnlocked(true);
-      showToast("Admin Master Key Configured.", "info");
+      showToast("Host code saved.", "info");
     }
   };
 
@@ -445,7 +481,7 @@ export default function App() {
     document.body.removeChild(tempInput);
     
     setCopied(true);
-    showToast("Terminal Room Key Copied.", "info");
+    showToast("Room code copied.", "info");
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -463,19 +499,12 @@ export default function App() {
       {/* Header Panel */}
       <header className="border-b border-neutral-900 bg-neutral-950 px-4 sm:px-6 py-4">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div className="flex items-center gap-3">
-            <span className="p-1.5 bg-orange-600 text-black text-xs font-black select-none">ST-09</span>
-            <div>
-              <h1 className="text-xs sm:text-sm font-bold text-neutral-100 tracking-widest uppercase">SYNCPLAY</h1>
-              <p className="text-[9px] sm:text-[10px] text-neutral-500 uppercase tracking-widest">Master-governed Video Terminal</p>
-            </div>
-          </div>
 
           {isJoined && (
-            <div className="flex flex-wrap items-center gap-2 text-[10px] sm:text-xs w-full md:w-auto">
-              <div className="flex items-center border border-neutral-800 bg-neutral-900 px-2 sm:px-3 py-1.5 flex-1 sm:flex-initial justify-between">
+            <div className="flex flex-wrap items-stretch gap-2 text-[10px] sm:text-xs w-full md:w-auto">
+              <div className="flex items-center h-9 sm:h-10 border border-neutral-800 bg-neutral-900 px-2 sm:px-3 flex-1 sm:flex-initial justify-between">
                 <div>
-                  <span className="text-neutral-500 mr-1 sm:mr-2">ROOM//</span>
+                  <span className="text-neutral-500 mr-1 sm:mr-2">ROOM</span>
                   <span className="text-neutral-100 font-bold">{roomId}</span>
                 </div>
                 <button onClick={copyRoomLink} className="ml-2 hover:text-orange-500 transition-colors p-0.5">
@@ -483,17 +512,17 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="flex items-center border border-neutral-800 bg-neutral-900 px-3 py-1.5">
-                <span className="text-neutral-500 mr-2">LINK//</span>
+              <div className="flex items-center h-9 sm:h-10 border border-neutral-800 bg-neutral-900 px-3">
+                <span className="text-neutral-500 mr-2">SYNC</span>
                 <span className={`font-bold ${syncStatus === 'ONLINE' ? 'text-emerald-500' : 'text-orange-500'}`}>
                   {syncStatus}
                 </span>
               </div>
 
-              <div className={`px-3 py-1.5 font-bold text-center ${
+              <div className={`h-9 sm:h-10 px-3 flex items-center justify-center font-bold text-center ${
                 role === 'admin' ? 'bg-orange-600 text-black' : 'border border-neutral-800 text-neutral-400'
               }`}>
-                {role.toUpperCase()}
+                {role === 'admin' ? 'HOST' : 'GUEST'}
               </div>
             </div>
           )}
@@ -508,18 +537,18 @@ export default function App() {
           <div className="col-span-12 max-w-md mx-auto w-full py-12 sm:py-16">
             <div className="border border-neutral-800 bg-neutral-950 p-5 sm:p-6">
               <div className="mb-6 border-b border-neutral-900 pb-4">
-                <h2 className="text-xs sm:text-sm font-bold text-neutral-100 tracking-widest uppercase">INITIALIZE CONNECTION</h2>
-                <p className="text-[10px] text-neutral-500 mt-1 uppercase">Enter terminal theater room index</p>
+                <h2 className="text-xs sm:text-sm font-bold text-neutral-100 tracking-widest uppercase">JUMP IN</h2>
+                <p className="text-[10px] text-neutral-500 mt-1 uppercase">Drop the room code</p>
               </div>
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-2">Target Terminal ID</label>
+                  <label className="block text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-2">Room code</label>
                   <input 
                     type="text" 
                     value={inputRoomId}
                     onChange={(e) => setInputRoomId(e.target.value)}
-                    placeholder="THEATER-01"
+                    placeholder="hangout-01"
                     className="w-full bg-neutral-900 border border-neutral-800 focus:border-neutral-500 rounded-none px-3 py-2.5 text-xs text-white placeholder-neutral-700 focus:outline-none transition-colors"
                   />
                 </div>
@@ -528,7 +557,7 @@ export default function App() {
                   onClick={joinRoom}
                   className="w-full h-11 bg-neutral-100 hover:bg-neutral-200 active:bg-neutral-300 text-black font-bold text-xs uppercase tracking-wider transition-colors flex items-center justify-center gap-2"
                 >
-                  Mount Terminal <ChevronRight className="w-4 h-4" />
+                  Join room <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
             </div>
@@ -550,7 +579,9 @@ export default function App() {
                   <>
                     <video
                       ref={videoRef}
+                      key={resolvedVideoSrc}
                       src={resolvedVideoSrc}
+                      preload="metadata"
                       playsInline
                       className="w-full h-full object-contain bg-black"
                       onTimeUpdate={handleTimeUpdate}
@@ -564,12 +595,12 @@ export default function App() {
                     )}
 
                     {/* Controls Overlay Bottom HUD */}
-                    <div className={`absolute inset-x-0 bottom-0 bg-neutral-950/95 border-t border-neutral-800 p-3 sm:p-4 transition-all duration-300 z-20 flex flex-col gap-3 ${
+                    <div className={`absolute inset-x-0 bottom-0 bg-neutral-950/95 border-t border-neutral-800 p-2.5 sm:p-4 transition-all duration-300 z-20 flex flex-col gap-2.5 sm:gap-3 ${
                       showControls ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0 pointer-events-none'
                     }`}>
                       
                       {/* Interactive Time Track */}
-                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2 sm:gap-3">
                         <span className="text-[9px] sm:text-[10px] font-bold text-neutral-400 min-w-[50px]">{formatTime(currentTime)}</span>
                         
                         <input 
@@ -586,19 +617,19 @@ export default function App() {
                       </div>
 
                       {/* Device Action Console Row */}
-                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-4">
                         
                         <div className="flex items-center justify-between sm:justify-start gap-4">
                           {role === 'admin' ? (
                             <button 
                               onClick={togglePlay} 
-                              className="h-10 px-3 border border-neutral-800 hover:border-neutral-500 bg-neutral-900 text-xs font-bold text-neutral-100 hover:text-orange-500 transition-colors flex items-center gap-2 uppercase min-w-[85px] justify-center"
+                              className="h-9 sm:h-10 px-2.5 sm:px-3 border border-neutral-800 hover:border-neutral-500 bg-neutral-900 text-[10px] sm:text-xs font-bold text-neutral-100 hover:text-orange-500 transition-colors flex items-center gap-1.5 uppercase min-w-[72px] sm:min-w-[85px] justify-center"
                             >
                               {isPlaying ? <><Pause className="w-3.5 h-3.5" /> Pause</> : <><Play className="w-3.5 h-3.5 fill-current" /> Play</>}
                             </button>
                           ) : (
-                            <div className="flex items-center gap-1.5 text-neutral-500 text-[9px] sm:text-[10px] font-bold uppercase py-2">
-                              <Lock className="w-3.5 h-3.5" /> Viewer Hold
+                            <div className="flex items-center gap-1.5 text-neutral-500 text-[9px] sm:text-[10px] font-bold uppercase py-1.5">
+                              <Lock className="w-3.5 h-3.5" /> Viewer mode
                             </div>
                           )}
 
@@ -606,7 +637,7 @@ export default function App() {
 
                           {/* Sound Slider */}
                           <div className="flex items-center gap-2">
-                            <button onClick={toggleMute} className="text-neutral-400 hover:text-neutral-200 transition-colors p-2 hover:bg-neutral-900 border border-transparent hover:border-neutral-800">
+                            <button onClick={toggleMute} className="text-neutral-400 hover:text-neutral-200 transition-colors p-1.5 sm:p-2 hover:bg-neutral-900 border border-transparent hover:border-neutral-800">
                               {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                             </button>
                             <input 
@@ -616,19 +647,19 @@ export default function App() {
                               step="0.05"
                               value={volume}
                               onChange={handleVolumeChange}
-                              className="w-16 sm:w-20 accent-neutral-300 bg-neutral-800 h-1 cursor-pointer"
+                              className="w-14 sm:w-20 accent-neutral-300 bg-neutral-800 h-1 cursor-pointer"
                             />
                           </div>
                         </div>
 
                         {/* Right aligned details & Fullscreen trigger */}
-                        <div className="flex items-center justify-between sm:justify-end gap-4 text-[9px] sm:text-[10px] text-neutral-500 font-bold uppercase border-t border-neutral-900 sm:border-0 pt-2 sm:pt-0">
-                          <span>FRAME_SYNC: STABLE</span>
+                        <div className="flex items-center justify-between sm:justify-end gap-3 text-[8px] sm:text-[10px] text-neutral-500 font-bold uppercase border-t border-neutral-900 sm:border-0 pt-2 sm:pt-0">
+                          <span>FRAME SYNC: OK</span>
                           <button
                             onClick={toggleFullscreen}
                             aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
                             title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-                            className="text-neutral-400 hover:text-neutral-100 transition-colors p-2 border border-neutral-800 sm:border-0 bg-neutral-900 sm:bg-transparent"
+                            className="text-neutral-400 hover:text-neutral-100 transition-colors p-1.5 sm:p-2 border border-neutral-800 sm:border-0 bg-neutral-900 sm:bg-transparent"
                           >
                             <Maximize className="w-4 h-4" />
                           </button>
@@ -644,21 +675,21 @@ export default function App() {
                     <div className="w-10 h-10 border border-neutral-800 flex items-center justify-center text-neutral-600 mb-3 font-black text-xs select-none">
                       ST
                     </div>
-                    <h3 className="text-[10px] sm:text-xs font-bold text-neutral-200 uppercase tracking-widest">No Media Mounted</h3>
+                    <h3 className="text-[10px] sm:text-xs font-bold text-neutral-200 uppercase tracking-widest">No media loaded</h3>
                     {role === 'admin' ? (
                       <p className="text-[9px] text-neutral-500 mt-2 max-w-xs uppercase leading-normal">
-                        Load a system file or network direct stream below to begin broadcast sync.
+                        Drop in a file or paste a link below to start the room.
                       </p>
                     ) : (
                       <div className="mt-3 space-y-2 max-w-xs w-full px-2">
                         <p className="text-[9px] text-neutral-500 uppercase leading-normal">
-                          Waiting for host to mount video stream.
+                          Waiting on the host to load something.
                         </p>
                         {roomData?.videoName && (
                           <div className="border border-neutral-800 bg-neutral-900 p-2.5 text-left">
-                            <span className="text-[8px] text-neutral-500 uppercase block">Expected Local Video File:</span>
+                            <span className="text-[8px] text-neutral-500 uppercase block">Local file to match</span>
                             <span className="text-[9px] sm:text-[10px] text-orange-500 font-bold block truncate mt-1">{roomData.videoName}</span>
-                            <span className="text-[8px] text-neutral-400 block mt-1 uppercase">Mount same file locally below to auto-sync.</span>
+                            <span className="text-[8px] text-neutral-400 block mt-1 uppercase">Use the same file below to sync up.</span>
                           </div>
                         )}
                       </div>
@@ -670,8 +701,8 @@ export default function App() {
               {/* MEDIA PANEL DECK */}
               <div className="border border-neutral-800 bg-neutral-950 p-4 sm:p-5">
                 <div className="flex items-center justify-between border-b border-neutral-900 pb-3 mb-4">
-                  <h3 className="text-[10px] sm:text-xs font-bold text-neutral-100 uppercase tracking-wider">Mount Source</h3>
-                  <span className="text-[8px] sm:text-[9px] text-neutral-500 uppercase">Input Node</span>
+                  <h3 className="text-[10px] sm:text-xs font-bold text-neutral-100 uppercase tracking-wider">Source</h3>
+                  <span className="text-[8px] sm:text-[9px] text-neutral-500 uppercase">Input</span>
                 </div>
 
                 <div className="flex gap-2 border-b border-neutral-900 pb-4 mb-4">
@@ -683,8 +714,8 @@ export default function App() {
                         : 'border-neutral-850 text-neutral-400 hover:text-neutral-200 hover:border-neutral-800'
                     }`}
                   >
-                    Local File Sync
-                  </button>
+                     Local file
+                   </button>
                   <button 
                     onClick={() => setVideoSourceType('url')}
                     disabled={role !== 'admin'}
@@ -694,8 +725,8 @@ export default function App() {
                         : 'border-neutral-850 text-neutral-400 hover:text-neutral-200 hover:border-neutral-800'
                     }`}
                   >
-                    Direct URL
-                  </button>
+                     Link
+                   </button>
                 </div>
 
                 {videoSourceType === 'file' ? (
@@ -710,10 +741,10 @@ export default function App() {
                       <div className="space-y-2 pointer-events-none">
                         <FileVideo className="w-5 h-5 text-neutral-500 mx-auto" />
                         <p className="text-[10px] text-neutral-200 uppercase font-bold break-all">
-                          {selectedFile ? `File: ${selectedFile.name}` : "Mount Local File System"}
+                          {selectedFile ? `File: ${selectedFile.name}` : "Drop a video file"}
                         </p>
                         <p className="text-[8px] text-neutral-500 uppercase">
-                          Zero-upload streaming. Direct hardware routing.
+                          No uploads. Just a local file.
                         </p>
                       </div>
                     </div>
@@ -722,10 +753,10 @@ export default function App() {
                       <div className="border border-neutral-800 bg-neutral-900 p-3">
                         <div className="flex items-center gap-2 mb-1.5">
                           <span className="w-1.5 h-1.5 bg-orange-500"></span>
-                          <span className="text-[8px] sm:text-[9px] font-bold text-neutral-300 uppercase">Target File:</span>
+                           <span className="text-[8px] sm:text-[9px] font-bold text-neutral-300 uppercase">Match this file</span>
                         </div>
                         <p className="text-[9px] sm:text-[10px] text-neutral-400 leading-normal uppercase">
-                          Locate and mount your local file copy to sync timelines:
+                          Use the same local file to keep time in step:
                         </p>
                         <p className="text-[9px] sm:text-[10px] text-orange-500 font-bold bg-neutral-950 border border-neutral-800 p-2.5 mt-2 break-all font-mono select-all">
                           {roomData.videoName}
@@ -736,7 +767,7 @@ export default function App() {
                 ) : (
                   <form onSubmit={handleUrlSubmit} className="space-y-4">
                     <div>
-                      <label className="block text-[8px] sm:text-[9px] font-bold text-neutral-500 uppercase mb-2">Network Video Direct Link</label>
+                        <label className="block text-[8px] sm:text-[9px] font-bold text-neutral-500 uppercase mb-2">Direct video link</label>
                       <input 
                         type="url" 
                         value={videoUrl}
@@ -749,9 +780,9 @@ export default function App() {
                     {role === 'admin' && (
                       <button 
                         type="submit" 
-                        className="w-full h-10 border border-neutral-850 hover:border-neutral-750 bg-neutral-900 hover:bg-neutral-850 text-neutral-200 font-bold text-[9px] sm:text-[10px] uppercase tracking-wider transition-colors"
+                        className="w-full h-9 sm:h-10 border border-neutral-850 hover:border-neutral-750 bg-neutral-900 hover:bg-neutral-850 text-neutral-200 font-bold text-[9px] sm:text-[10px] uppercase tracking-wider transition-colors"
                       >
-                        Push Mount Signal to Terminals
+                        Send to room
                       </button>
                     )}
                   </form>
@@ -768,27 +799,27 @@ export default function App() {
               <div className="border border-neutral-800 bg-neutral-950 p-4 sm:p-5">
                 <div className="flex items-center justify-between border-b border-neutral-900 pb-3 mb-4">
                   <div className="flex items-center gap-2">
-                    <Shield className="w-4 h-4 text-neutral-400" />
-                    <h3 className="text-[10px] sm:text-xs font-bold text-neutral-100 uppercase tracking-wider">Access Lock</h3>
+                    <ChevronRight className="w-4 h-4 text-neutral-400" />
+                    <h3 className="text-[10px] sm:text-xs font-bold text-neutral-100 uppercase tracking-wider">Host lock</h3>
                   </div>
                   <span className={`text-[8px] sm:text-[9px] font-bold px-2 py-0.5 ${
                     isAdminUnlocked ? 'bg-orange-600 text-black' : 'bg-neutral-900 text-neutral-500'
                   }`}>
-                    {isAdminUnlocked ? 'MASTER' : 'VIEWER'}
+                    {isAdminUnlocked ? 'HOST' : 'GUEST'}
                   </span>
                 </div>
 
                 {!isAdminUnlocked ? (
                   <div className="space-y-4">
-                    <p className="text-[9px] sm:text-[10px] text-neutral-500 leading-normal uppercase">
-                      Timeline playhead and player states are currently locked. Unlock Master authority to govern viewers.
-                    </p>
+                      <p className="text-[9px] sm:text-[10px] text-neutral-500 leading-normal uppercase">
+                        Timeline and playback are locked. Grab host access to steer the room.
+                      </p>
 
                     {roomData?.adminPasscode ? (
                       /* Unlock Room passcode */
                       <div className="space-y-3">
                         <div>
-                          <label className="block text-[8px] sm:text-[9px] font-bold text-neutral-500 uppercase mb-1.5">Enter Admin Code Key</label>
+                           <label className="block text-[8px] sm:text-[9px] font-bold text-neutral-500 uppercase mb-1.5">Enter host code</label>
                           <input 
                             type="password" 
                             value={inputPasscode}
@@ -799,16 +830,16 @@ export default function App() {
                         </div>
                         <button 
                           onClick={handleAdminAuth}
-                          className="w-full h-10 bg-neutral-100 hover:bg-neutral-200 text-black font-bold text-[9px] sm:text-[10px] uppercase transition-colors"
-                        >
-                          Acquire Master Authority
-                        </button>
+                           className="w-full h-9 sm:h-10 bg-neutral-100 hover:bg-neutral-200 text-black font-bold text-[9px] sm:text-[10px] uppercase transition-colors"
+                          >
+                           Unlock host mode
+                         </button>
                       </div>
                     ) : (
                       /* Set Passcode first time */
                       <div className="space-y-3">
                         <div>
-                          <label className="block text-[8px] sm:text-[9px] font-bold text-neutral-500 uppercase mb-1.5">Configure Lock Code</label>
+                           <label className="block text-[8px] sm:text-[9px] font-bold text-neutral-500 uppercase mb-1.5">Set host code</label>
                           <input 
                             type="password" 
                             value={adminPasscode}
@@ -819,58 +850,34 @@ export default function App() {
                         </div>
                         <button 
                           onClick={handleAdminAuth}
-                          className="w-full h-10 bg-neutral-100 hover:bg-neutral-200 text-black font-bold text-[9px] sm:text-[10px] uppercase transition-colors"
-                        >
-                          Establish Master Control
-                        </button>
+                           className="w-full h-9 sm:h-10 bg-neutral-100 hover:bg-neutral-200 text-black font-bold text-[9px] sm:text-[10px] uppercase transition-colors"
+                          >
+                           Save host mode
+                         </button>
                       </div>
                     )}
                   </div>
                 ) : (
                   <div className="space-y-4">
                     <div className="border border-orange-500/30 bg-orange-950/25 p-3">
-                      <span className="text-[8px] sm:text-[9px] font-bold text-orange-500 uppercase block mb-1">Master Lock Active</span>
-                      <p className="text-[9px] sm:text-[10px] text-neutral-300 leading-normal uppercase">
-                        Master node state syncing enabled. Changes to playheads will cascade to other endpoints.
-                      </p>
+                       <span className="text-[8px] sm:text-[9px] font-bold text-orange-500 uppercase block mb-1">Host mode on</span>
+                       <p className="text-[9px] sm:text-[10px] text-neutral-300 leading-normal uppercase">
+                         Playback changes will roll out to everyone in the room.
+                       </p>
                     </div>
 
                     <button 
                       onClick={() => {
                         setRole('viewer');
                         setIsAdminUnlocked(false);
-                        showToast("Revoked Master Privileges.", "info");
+                        showToast("Host mode off.", "info");
                       }}
-                      className="w-full h-10 border border-neutral-800 hover:bg-neutral-900 text-neutral-400 hover:text-neutral-200 text-[9px] sm:text-[10px] uppercase transition-colors"
-                    >
-                      Relinquish Control
-                    </button>
+                       className="w-full h-9 sm:h-10 border border-neutral-800 hover:bg-neutral-900 text-neutral-400 hover:text-neutral-200 text-[9px] sm:text-[10px] uppercase transition-colors"
+                      >
+                       Step back
+                      </button>
                   </div>
                 )}
-              </div>
-
-              {/* TECHNICAL OPERATIONAL PROTOCOL */}
-              <div className="border border-neutral-800 bg-neutral-950 p-4 sm:p-5">
-                <div className="border-b border-neutral-900 pb-3 mb-3">
-                  <h3 className="text-[10px] sm:text-xs font-bold text-neutral-100 uppercase tracking-wider">Operational Guide</h3>
-                </div>
-
-                <div className="space-y-4 text-[9px] sm:text-[10px] text-neutral-400 uppercase leading-normal">
-                  <div className="flex gap-2">
-                    <span className="text-orange-500 font-bold">A//</span>
-                    <p>Both viewers and master admin must type the exact same room ID to bind connection sockets.</p>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <span className="text-orange-500 font-bold">B//</span>
-                    <p>Using Local Files: Ensure file checksum/metadata matches. Zero high-bandwidth cloud hosting latency.</p>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <span className="text-orange-500 font-bold">C//</span>
-                    <p>Network streams must be directly reachable via local gateway address (e.g. NAS server links).</p>
-                  </div>
-                </div>
               </div>
 
             </div>
@@ -881,7 +888,7 @@ export default function App() {
 
       {/* Footer Frame */}
       <footer className="border-t border-neutral-900 bg-neutral-950 px-6 py-6 mt-auto text-center text-[8px] sm:text-[9px] text-neutral-600 uppercase tracking-widest">
-        <span>SYNCPLAY CONSOLE ST-09 // TERMINAL STABLE</span>
+        <span>made in home</span>
       </footer>
 
     </div>
