@@ -5,7 +5,6 @@ import { useChat } from '../hooks/useChat';
 const NICKNAME_KEY = 'watch-together:nickname';
 const MAX_RECORD_SECONDS = 30;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
 
 function loadNickname() {
   try {
@@ -41,18 +40,14 @@ function pickMime() {
   return '';
 }
 
-// ── component ─────────────────────────────────────────────────────────────────
 
 export default function Chat({ user, isJoined, roomId }) {
-  // Display name ────────────────────────────────────────────────────────────
   const [nickname, setNickname] = useState(loadNickname);
   const [editingNick, setEditingNick] = useState(!loadNickname());
   const [draftNick, setDraftNick] = useState(loadNickname);
 
-  // Text input ──────────────────────────────────────────────────────────────
   const [text, setText] = useState('');
 
-  // Recording ───────────────────────────────────────────────────────────────
   const [isRecording, setIsRecording] = useState(false);
   const [recordSecs, setRecordSecs] = useState(0);
   const [micDenied, setMicDenied] = useState(false);
@@ -70,12 +65,10 @@ export default function Chat({ user, isJoined, roomId }) {
 
   const { messages, sendText, sendVoice } = useChat({ user, isJoined, roomId });
 
-  // Auto-scroll ─────────────────────────────────────────────────────────────
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Nickname ────────────────────────────────────────────────────────────────
   const submitNick = () => {
     const n = draftNick.trim() || 'Anonymous';
     setNickname(n);
@@ -83,7 +76,6 @@ export default function Chat({ user, isJoined, roomId }) {
     setEditingNick(false);
   };
 
-  // Text send ───────────────────────────────────────────────────────────────
   const handleSendText = async () => {
     if (!text.trim()) return;
     await sendText(text, nickname || 'Anonymous');
@@ -97,7 +89,6 @@ export default function Chat({ user, isJoined, roomId }) {
     }
   };
 
-  // Voice record ────────────────────────────────────────────────────────────
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -151,7 +142,6 @@ export default function Chat({ user, isJoined, roomId }) {
     }
   };
 
-  // Playback ────────────────────────────────────────────────────────────────
   const togglePlay = (msg) => {
     let audio = audioMap.current[msg.id];
 
@@ -186,7 +176,6 @@ export default function Chat({ user, isJoined, roomId }) {
   return (
     <div className="flex flex-col border border-neutral-800 bg-neutral-950" style={{ height: '420px' }}>
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
       <div className="flex-shrink-0 border-b border-neutral-800 px-3 py-2 flex items-center justify-between">
         <span className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">
           Chat · {roomId}
@@ -201,7 +190,6 @@ export default function Chat({ user, isJoined, roomId }) {
         </button>
       </div>
 
-      {/* ── Nickname editor ─────────────────────────────────────────────── */}
       {editingNick && (
         <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900 px-3 py-2 flex gap-2 items-center">
           <input
@@ -209,7 +197,7 @@ export default function Chat({ user, isJoined, roomId }) {
             value={draftNick}
             onChange={(e) => setDraftNick(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && submitNick()}
-            placeholder="Display name (no login needed)"
+            placeholder="display Name"
             maxLength={24}
             className="flex-1 bg-neutral-950 border border-neutral-700 focus:border-orange-500 px-2.5 py-1.5 text-xs text-white placeholder-neutral-600 focus:outline-none transition-colors"
           />
@@ -222,11 +210,10 @@ export default function Chat({ user, isJoined, roomId }) {
         </div>
       )}
 
-      {/* ── Message list ────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto px-3 py-2.5 space-y-3 min-h-0">
         {messages.length === 0 && (
           <p className="text-center text-[10px] text-neutral-700 uppercase tracking-wider pt-6 select-none">
-            No messages yet — say hello
+            No messages yet — say yoo, nagga
           </p>
         )}
 
@@ -272,7 +259,6 @@ export default function Chat({ user, isJoined, roomId }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* ── Input bar ───────────────────────────────────────────────────── */}
       <div className="flex-shrink-0 border-t border-neutral-800 p-2.5 space-y-2">
 
         {/* Recording indicator */}

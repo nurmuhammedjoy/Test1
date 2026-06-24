@@ -30,8 +30,7 @@ export default function HostLock({
 
       {!isAdminUnlocked ? (
         <div className="space-y-4">
-          <p className="text-[9px] sm:text-[10px] text-neutral-500 leading-normal uppercase">
-            Timeline and playback are locked. Grab host access to steer the room.
+          <p className="text-[9px] sm:text-[10px] text-neutral-500 leading-normal uppercase">This shit is locked, so you can't control the video timeline or change anything. You gotta be the host for that, which means you need the passcode. If you create the room first, whatever passcode you put in becomes the host passcode.
           </p>
 
           <div className="space-y-3">

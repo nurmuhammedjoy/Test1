@@ -45,7 +45,7 @@ export default function Playlist({ items, currentUrl, canControlRoom, onAdd, onR
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://your-cdn.example/movie.mp4"
+            placeholder="https://104.80.5.48/movie.mp4"
             className="flex-1 min-w-0 bg-neutral-900 border border-neutral-800 focus:border-neutral-500 px-3 py-2.5 text-xs text-white placeholder-neutral-700 focus:outline-none transition-colors"
           />
           <button
