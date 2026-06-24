@@ -5,6 +5,7 @@ import RoomHeader from './components/RoomHeader';
 import VideoPlayer from './components/VideoPlayer';
 import Playlist from './components/Playlist';
 import HostLock from './components/HostLock';
+import Chat from './components/Chat';
 import { useToast } from './hooks/useToast';
 import { useAuth } from './hooks/useAuth';
 import { useRoomSync } from './hooks/useRoomSync';
@@ -363,6 +364,7 @@ export default function WatchTogether() {
                   showToast('Host mode off.', 'info');
                 }}
               />
+              <Chat user={user} isJoined={isJoined} roomId={roomId} />
             </div>
           </>
         )}
